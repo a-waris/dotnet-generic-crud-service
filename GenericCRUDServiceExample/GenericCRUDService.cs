@@ -14,7 +14,7 @@ public interface IGenericCRUDService<TModel, TDto>
     Task<TDto> Update(TDto dto, Expression<Func<TModel, bool>>? where = null,
         params Expression<Func<TModel, object>>[] references);
 
-    Task<bool> Delete(int id);
+    Task<bool> Delete(IGuid id);
 }
 
 public class GenericCRUDService<TModel, TDto> : IGenericCRUDService<TModel, TDto>
@@ -83,7 +83,7 @@ public class GenericCRUDService<TModel, TDto> : IGenericCRUDService<TModel, TDto
 
     }
 
-    public async Task<bool> Delete(int id)
+    public async Task<bool> Delete(IGuid id)
     {
         var entity = await _dbContext.Set<TModel>().FindAsync(id);
         if (entity == null)
