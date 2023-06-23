@@ -1,19 +1,19 @@
 using System.Linq.Expressions;
-using System.Reflection;
 using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 
 
 namespace GenericCRUDServiceExample;
 
-
 public interface IGenericCRUDService<TModel, TDto>
 {
-    Task<IEnumerable<TDto>> GetAll(Expression<Func<TModel, bool>> where = null, params string[] includes);
-    Task<TDto> GetById(int id, params string[] includes);
+    Task<IEnumerable<TDto>> GetAll(Expression<Func<TModel, bool>>? where = null, params string[] includes);
+    Task<TDto?> GetById(Expression<Func<TModel, bool>> predicateToGetId, params string[] includes);
     Task<TDto> Add(TDto dto, params Expression<Func<TModel, object>>[] references);
-    Task<TDto> Update(int id, TDto dto, Expression<Func<TModel, bool>> where = null,
+
+    Task<TDto> Update(TDto dto, Expression<Func<TModel, bool>>? where = null,
         params Expression<Func<TModel, object>>[] references);
+
     Task<bool> Delete(int id);
 }
 
@@ -22,17 +22,15 @@ public class GenericCRUDService<TModel, TDto> : IGenericCRUDService<TModel, TDto
     where TDto : class
 {
     private readonly IMapper _mapper;
-    private readonly DbContext _dbContext;
-    private readonly PropertyInfo _keyProperty;
+    private readonly IContext _dbContext;
 
-    public GenericCRUDService(IMapper mapper, DbContext dbContext)
+    public GenericCRUDService(IMapper mapper, IContext dbContext)
     {
         _mapper = mapper;
         _dbContext = dbContext;
-        _keyProperty = GetKeyProperty();
     }
 
-    public async Task<IEnumerable<TDto>> GetAll(Expression<Func<TModel, bool>> where = null,
+    public async Task<IEnumerable<TDto>> GetAll(Expression<Func<TModel, bool>>? where = null,
         params string[] includes)
     {
         var query = ApplyIncludes(_dbContext.Set<TModel>(), includes);
@@ -46,12 +44,15 @@ public class GenericCRUDService<TModel, TDto> : IGenericCRUDService<TModel, TDto
         return _mapper.Map<IEnumerable<TDto>>(entities);
     }
 
-    public async Task<TDto> GetById(int id, params string[] includes)
+    public async Task<TDto?> GetById(Expression<Func<TModel, bool>> predicateToGetId,
+        params string[] includes)
     {
         var query = ApplyIncludes(_dbContext.Set<TModel>(), includes);
-        var entity = await query.FirstOrDefaultAsync(e => GetKeyValue(e) == id);
-        return _mapper.Map<TDto>(entity);
+
+        var entity = await query.FirstOrDefaultAsync(predicateToGetId);
+        return entity == null ? null : _mapper.Map<TDto>(entity);
     }
+
 
     public async Task<TDto> Add(TDto dto, params Expression<Func<TModel, object>>[] references)
     {
@@ -64,17 +65,22 @@ public class GenericCRUDService<TModel, TDto> : IGenericCRUDService<TModel, TDto
         return _mapper.Map<TDto>(entity);
     }
 
-    public async Task<TDto> Update(int id, TDto dto, Expression<Func<TModel, bool>> where = null,
+    public async Task<TDto> Update(TDto dto, Expression<Func<TModel, bool>>? where = null,
         params Expression<Func<TModel, object>>[] references)
     {
-        var query = ApplyWhere(_dbContext.Set<TModel>(), where, id);
-        var entity = await query.FirstOrDefaultAsync();
+        var query = _dbContext.Set<TModel>().AsQueryable();
 
-        _mapper.Map(dto, entity);
+        if (where != null)
+        {
+            query = query.Where(where);
+        }
+
+        var entity = await query.FirstOrDefaultAsync();
+        if (entity == null) throw new Exception("Entity not found");
         await LoadReferences(entity, references);
         await _dbContext.SaveChangesAsync();
-
         return _mapper.Map<TDto>(entity);
+
     }
 
     public async Task<bool> Delete(int id)
@@ -96,37 +102,11 @@ public class GenericCRUDService<TModel, TDto> : IGenericCRUDService<TModel, TDto
         return includes.Aggregate(query, (current, include) => current.Include(include));
     }
 
-    private IQueryable<TModel> ApplyWhere(IQueryable<TModel> query, Expression<Func<TModel, bool>> where, int id)
-    {
-        query = query.Where(where ?? (entity => GetKeyValue(entity) == id));
-
-        return query;
-    }
-
-    private int GetKeyValue(TModel entity)
-    {
-        return (int)_keyProperty.GetValue(entity)!;
-    }
-
     private async Task LoadReferences(TModel entity, IEnumerable<Expression<Func<TModel, object>>> references)
     {
         foreach (var reference in references)
         {
-            await _dbContext.Entry(entity).Reference(reference).LoadAsync();
+            await _dbContext.Entry(entity).Reference(reference!).LoadAsync();
         }
-    }
-
-    private static PropertyInfo GetKeyProperty()
-    {
-        var keyProperty = typeof(TModel).GetProperties().FirstOrDefault(p =>
-            p.CustomAttributes.Any(a =>
-                a.AttributeType == typeof(System.ComponentModel.DataAnnotations.KeyAttribute)));
-
-        if (keyProperty == null)
-        {
-            throw new Exception("No [Key] attribute found in the model");
-        }
-
-        return keyProperty;
     }
 }
